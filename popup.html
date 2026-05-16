@@ -160,6 +160,21 @@
   text-align: center;
 }
 
+    #captureBtn {
+      background: transparent;
+      color: #667eea;
+      border: 2px solid #667eea;
+      margin-top: 8px;
+      font-size: 13px;
+    }
+
+    #captureBtn:hover:not(:disabled) {
+      background: #667eea;
+      color: white;
+      transform: translateY(-1px);
+      box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+    }
+
   </style>
 </head>
 <body>
@@ -181,6 +196,7 @@
       <button id="findBtn">Find Icon</button>
       <button id="downloadBtn" disabled>Download PNG</button>
     </div>
+    <button id="captureBtn" style="width:100%">✂ Capture from Page</button>
 	<div id="iconList" class="icon-list" aria-live="polite"></div>
 
   </div>

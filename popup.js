@@ -6,6 +6,7 @@ let iconThumbObjectUrls = [];
 
 document.getElementById('findBtn').addEventListener('click', findFavicon);
 document.getElementById('downloadBtn').addEventListener('click', downloadIcon);
+document.getElementById('captureBtn').addEventListener('click', startCapture);
 document.getElementById('slug').addEventListener('input', updateDownloadButton);
 
 document.getElementById('slug').addEventListener('keydown', (e) => {
@@ -275,6 +276,7 @@ function iconPrimaryLabel(icon) {
 }
 
 function iconOriginalLabel(icon) {
+  if (icon.isCapture) return '(From page)';
   if (icon.width === icon.squaredSize && icon.height === icon.squaredSize) return null;
   return `(Originally ${icon.width}×${icon.height})`;
 }
@@ -319,7 +321,7 @@ async function selectIcon(icon) {
   }
 }
 
-chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
   if (tabs[0]) {
     try {
       const url = new URL(tabs[0].url);
@@ -330,5 +332,45 @@ chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
   }
   document.getElementById('slug').focus();
   document.getElementById('slug').select();
-  findFavicon();
+
+  // Check for a favicon captured via the page overlay tool
+  const stored = await chrome.storage.session.get('pendingCapture');
+  if (stored.pendingCapture) {
+    await chrome.storage.session.remove('pendingCapture');
+    await loadCapturedFavicon(stored.pendingCapture);
+  } else {
+    findFavicon();
+  }
 });
+
+async function startCapture() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    window.close();
+  } catch (e) {
+    const status = document.getElementById('status');
+    status.className = 'error';
+    status.textContent = 'Cannot capture on this page.';
+  }
+}
+
+async function loadCapturedFavicon({ dataUrl, size }) {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  const icon = {
+    url: 'capture',
+    blob,
+    width: size,
+    height: size,
+    squaredSize: size,
+    pngBlob: blob,
+    isCapture: true,
+    objectUrl: URL.createObjectURL(blob)
+  };
+  iconThumbObjectUrls.push(icon.objectUrl);
+  foundIcons = [icon];
+  renderIconList(foundIcons);
+  await selectIcon(foundIcons[0]);
+  updateDownloadButton();
+}
