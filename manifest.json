@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Favicon Downloader",
-  "version": "1.0",
+  "version": "2.0",
   "description": "Download the highest resolution favicon as a 512x512 PNG",
   "permissions": [
     "activeTab",

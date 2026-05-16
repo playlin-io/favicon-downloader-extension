@@ -141,6 +141,9 @@
   cursor: pointer;
   transition: transform 0.06s ease, box-shadow 0.06s ease;
   background: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 .icon-item:hover { transform: translateY(-1px); box-shadow: 0 1px 6px rgba(0,0,0,0.08); }
 .icon-item.selected { outline: 2px solid #4a90e2; }
@@ -161,7 +164,8 @@
 </head>
 <body>
   <div class="container">
-    <h1>🎨 Favicon Downloader</h1>
+    <h1>Favicon Downloader</h1>
+    <p style="text-align:center; font-size:12px; color:#888; margin:-14px 0 16px 0;">a free tool by <a href="https://playlin.io/?ref=favicon-extension" target="_blank" style="color:#667eea; text-decoration:none;">Playlin</a></p>
     
     <div class="preview-section">
       <img id="preview" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='128' viewBox='0 0 128 128'%3E%3Crect width='128' height='128' fill='%23f5f5f5'/%3E%3Ctext x='64' y='64' font-family='Arial' font-size='12' fill='%23999' text-anchor='middle' dominant-baseline='middle'%3ENo icon loaded%3C/text%3E%3C/svg%3E" alt="Icon preview">
@@ -169,7 +173,7 @@
     </div>
     
     <div class="input-group">
-      <label for="slug">Filename slug (&lt;slug&gt;-icon.png)</label>
+      <label for="slug">Filename (&lt;slug&gt;-favicon.png)</label>
       <input type="text" id="slug" placeholder="example-site" autocomplete="off">
     </div>
     

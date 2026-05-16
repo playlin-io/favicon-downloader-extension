@@ -108,10 +108,30 @@ async function findAllIcons(urls) {
     .map(r => r.value)
     .sort((a, b) => Math.min(b.width, b.height) - Math.min(a.width, a.height));
 
-  validIcons.forEach(icon => {
-    icon.objectUrl = URL.createObjectURL(icon.blob);
+  await Promise.all(validIcons.map(async (icon) => {
+    icon.squaredSize = Math.max(icon.width, icon.height);
+    icon.pngBlob = await convertToPng(icon.blob);
+    icon.objectUrl = URL.createObjectURL(icon.pngBlob || icon.blob);
     iconThumbObjectUrls.push(icon.objectUrl);
-  });
+  }));
+
+  // If every icon is larger than 512, offer a downscaled 512×512 option
+  const allLargerThan512 = validIcons.length > 0 && validIcons.every(icon => icon.squaredSize > 512);
+  if (allLargerThan512) {
+    const best = validIcons[0];
+    const pngBlob512 = await convertToPng(best.blob, 512);
+    const synth512 = {
+      url: best.url,
+      blob: best.blob,
+      width: best.width,
+      height: best.height,
+      squaredSize: 512,
+      pngBlob: pngBlob512,
+      objectUrl: URL.createObjectURL(pngBlob512)
+    };
+    iconThumbObjectUrls.push(synth512.objectUrl);
+    validIcons.push(synth512);
+  }
 
   return validIcons;
 }
@@ -147,19 +167,25 @@ async function loadIcon(url) {
   }
 }
 
-// UPDATED: convert to PNG at native size
-async function convertToPng(blob) {
+async function convertToPng(blob, outputSize = null) {
   return new Promise((resolve) => {
     const img = new Image();
     const objectUrl = URL.createObjectURL(blob);
 
     img.onload = () => {
       URL.revokeObjectURL(objectUrl);
+      const squaredSize = Math.max(img.width, img.height);
+      const size = outputSize || squaredSize;
+      const scale = size / squaredSize;
+      const offsetX = Math.floor((squaredSize - img.width) / 2) * scale;
+      const offsetY = Math.floor((squaredSize - img.height) / 2) * scale;
       const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
+      canvas.width = size;
+      canvas.height = size;
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0);
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, size, size);
+      ctx.drawImage(img, offsetX, offsetY, img.width * scale, img.height * scale);
       canvas.toBlob(resolve, 'image/png', 1.0);
     };
 
@@ -211,10 +237,25 @@ function renderIconList(icons) {
 
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = `${icon.width}×${icon.height}`;
+    meta.textContent = iconPrimaryLabel(icon);
 
-    item.appendChild(img);
-    item.appendChild(meta);
+    const origLabel = iconOriginalLabel(icon);
+    if (origLabel) {
+      const origEl = document.createElement('div');
+      origEl.className = 'meta';
+      origEl.textContent = origLabel;
+      item.appendChild(img);
+      item.appendChild(meta);
+      item.appendChild(origEl);
+    } else {
+      item.appendChild(img);
+      item.appendChild(meta);
+    }
+
+    const sizeEl = document.createElement('div');
+    sizeEl.className = 'meta';
+    sizeEl.textContent = icon.pngBlob ? formatBytes(icon.pngBlob.size) : '';
+    item.appendChild(sizeEl);
 
     item.addEventListener('click', async () => {
       await selectIcon(icon);
@@ -227,6 +268,21 @@ function renderIconList(icons) {
 
   const firstItem = container.querySelector('.icon-item');
   if (firstItem) firstItem.classList.add('selected');
+}
+
+function iconPrimaryLabel(icon) {
+  return `${icon.squaredSize}×${icon.squaredSize}`;
+}
+
+function iconOriginalLabel(icon) {
+  if (icon.width === icon.squaredSize && icon.height === icon.squaredSize) return null;
+  return `(Originally ${icon.width}×${icon.height})`;
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
 }
 
 function clearIconList() {
@@ -243,7 +299,7 @@ async function selectIcon(icon) {
   try {
     if (!icon.pngBlob) {
       status.className = 'loading';
-      status.textContent = `Preparing ${icon.width}x${icon.height} icon...`;
+      status.textContent = `Preparing ${iconPrimaryLabel(icon)} icon...`;
       icon.pngBlob = await convertToPng(icon.blob);
     }
     currentIconUrl = icon.url;
@@ -253,8 +309,9 @@ async function selectIcon(icon) {
     reader.onload = (e) => { preview.src = e.target.result; };
     reader.readAsDataURL(currentIconBlob);
 
+    const orig = iconOriginalLabel(icon);
     status.className = 'success';
-    status.textContent = `Selected ${icon.width}x${icon.height}`;
+    status.innerHTML = `Selected ${iconPrimaryLabel(icon)}${orig ? `<br><span style="font-size:10px;opacity:0.8">${orig}</span>` : ''}`;
     updateDownloadButton();
   } catch (e) {
     status.className = 'error';
