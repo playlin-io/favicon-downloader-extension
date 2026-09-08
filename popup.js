@@ -32,6 +32,7 @@ async function findFavicon() {
 
     const candidates = [
       await getIconsFromPage(tab.id),
+      `${url.origin}/favicon.svg`,
       `${url.origin}/favicon.ico`,
       `${url.origin}/favicon.png`,
       `${url.origin}/apple-touch-icon.png`,
@@ -107,11 +108,12 @@ async function findAllIcons(urls) {
   const validIcons = iconsSettled
     .filter(r => r.status === 'fulfilled' && r.value)
     .map(r => r.value)
-    .sort((a, b) => Math.min(b.width, b.height) - Math.min(a.width, a.height));
+    .sort((a, b) => (b.isSvg ? 512 : Math.min(b.width, b.height)) -
+      (a.isSvg ? 512 : Math.min(a.width, a.height)));
 
   await Promise.all(validIcons.map(async (icon) => {
-    icon.squaredSize = Math.max(icon.width, icon.height);
-    icon.pngBlob = await convertToPng(icon.blob);
+    icon.squaredSize = icon.isSvg ? 512 : Math.max(icon.width, icon.height);
+    icon.pngBlob = await convertToPng(icon.blob, icon.squaredSize);
     icon.objectUrl = URL.createObjectURL(icon.pngBlob || icon.blob);
     iconThumbObjectUrls.push(icon.objectUrl);
   }));
@@ -142,8 +144,33 @@ async function loadIcon(url) {
     const response = await fetch(url);
     if (!response.ok) return null;
 
-    const blob = await response.blob();
+    let blob = await response.blob();
     if (!blob || blob.size === 0) return null;
+
+    // Inspect the document too: SVGs can be served from extensionless URLs
+    // or with a generic Content-Type. Only accept an actual SVG root.
+    const source = await blob.text();
+    const svgDocument = new DOMParser().parseFromString(source, 'image/svg+xml');
+    const svg = svgDocument.documentElement;
+    const isSvg = svg.localName === 'svg' &&
+      svg.namespaceURI === 'http://www.w3.org/2000/svg' &&
+      !svgDocument.querySelector('parsererror');
+    if (isSvg) {
+      // Give viewBox-only SVGs an explicit viewport for reliable image loading.
+      // Preserve their aspect ratio and rasterize directly at the target size.
+      const viewBox = svg.getAttribute('viewBox')?.trim().split(/[\s,]+/).map(Number);
+      const width = svg.width.baseVal.value;
+      const height = svg.height.baseVal.value;
+      const ratio = width > 0 && height > 0 ? width / height :
+        viewBox?.length === 4 && viewBox.every(Number.isFinite) && viewBox[2] > 0 && viewBox[3] > 0
+          ? viewBox[2] / viewBox[3] : 1;
+      if (!svg.hasAttribute('viewBox') && width > 0 && height > 0) {
+        svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      }
+      svg.setAttribute('width', String(ratio >= 1 ? 512 : 512 * ratio));
+      svg.setAttribute('height', String(ratio >= 1 ? 512 / ratio : 512));
+      blob = new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' });
+    }
 
     return new Promise((resolve) => {
       const img = new Image();
@@ -153,6 +180,7 @@ async function loadIcon(url) {
         resolve({
           url,
           blob,
+          isSvg,
           width: img.width,
           height: img.height
         });
@@ -178,8 +206,8 @@ async function convertToPng(blob, outputSize = null) {
       const squaredSize = Math.max(img.width, img.height);
       const size = outputSize || squaredSize;
       const scale = size / squaredSize;
-      const offsetX = Math.floor((squaredSize - img.width) / 2) * scale;
-      const offsetY = Math.floor((squaredSize - img.height) / 2) * scale;
+      const offsetX = (squaredSize - img.width) / 2 * scale;
+      const offsetY = (squaredSize - img.height) / 2 * scale;
       const canvas = document.createElement('canvas');
       canvas.width = size;
       canvas.height = size;
@@ -190,7 +218,10 @@ async function convertToPng(blob, outputSize = null) {
       canvas.toBlob(resolve, 'image/png', 1.0);
     };
 
-    img.onerror = () => resolve(null);
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(null);
+    };
     img.src = objectUrl;
   });
 }
@@ -226,11 +257,22 @@ function renderIconList(icons) {
   const container = document.getElementById('iconList');
   container.innerHTML = '';
   icons.forEach((icon, idx) => {
+    const card = document.createElement('div');
+    card.className = 'icon-card';
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'copy-icon-btn';
+    copyBtn.title = 'Copy PNG to clipboard';
+    copyBtn.setAttribute('aria-label', `Copy icon ${idx + 1} (${iconPrimaryLabel(icon)}) as PNG`);
+    copyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>';
+    copyBtn.addEventListener('click', () => copyIcon(icon, copyBtn));
+    card.appendChild(copyBtn);
+
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'icon-item';
     item.setAttribute('data-index', String(idx));
-    item.title = `${icon.width}x${icon.height}`;
+    item.title = `${iconPrimaryLabel(icon)}${icon.isSvg ? ' (SVG on white)' : ''}`;
 
     const img = document.createElement('img');
     img.src = icon.objectUrl;
@@ -264,11 +306,32 @@ function renderIconList(icons) {
       item.classList.add('selected');
     });
 
-    container.appendChild(item);
+    card.appendChild(item);
+    container.appendChild(card);
   });
 
   const firstItem = container.querySelector('.icon-item');
   if (firstItem) firstItem.classList.add('selected');
+}
+
+async function copyIcon(icon, button) {
+  const status = document.getElementById('status');
+  button.disabled = true;
+  try {
+    const pngBlob = icon.pngBlob || await convertToPng(icon.blob, icon.squaredSize);
+    if (!pngBlob || pngBlob.type !== 'image/png') {
+      throw new Error('Could not prepare PNG.');
+    }
+    icon.pngBlob = pngBlob;
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+    status.className = 'success';
+    status.textContent = `Copied ${iconPrimaryLabel(icon)} PNG to clipboard`;
+  } catch (error) {
+    status.className = 'error';
+    status.textContent = 'Copy failed: ' + error.message;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function iconPrimaryLabel(icon) {
@@ -277,6 +340,7 @@ function iconPrimaryLabel(icon) {
 
 function iconOriginalLabel(icon) {
   if (icon.isCapture) return '(From page)';
+  if (icon.isSvg) return '(SVG on white)';
   if (icon.width === icon.squaredSize && icon.height === icon.squaredSize) return null;
   return `(Originally ${icon.width}×${icon.height})`;
 }
